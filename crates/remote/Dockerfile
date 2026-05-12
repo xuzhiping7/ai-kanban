@@ -12,10 +12,11 @@ WORKDIR /repo
 ENV VITE_RELAY_API_BASE_URL=${VITE_RELAY_API_BASE_URL}
 ENV VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY=${VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY}
 
-RUN corepack enable
-
 # Force pnpm to use mirror (npmjs.org blocked from Docker)
 ENV npm_config_registry=https://registry.npmmirror.com
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+
+RUN corepack enable
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/local-web/package.json packages/local-web/package.json
@@ -50,6 +51,7 @@ ARG HTTPS_PROXY=""
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV CARGO_TARGET_DIR=/app/target
+ENV RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup
 ENV http_proxy=http://host.docker.internal:7897
 ENV https_proxy=http://host.docker.internal:7897
 ENV POSTHOG_API_KEY=${POSTHOG_API_KEY}

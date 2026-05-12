@@ -63,6 +63,11 @@
           "autonomy": "skip-permissions-unsafe"
         }
       }
+    },
+    "DEEP_SEEK_TUI": {
+      "DEFAULT": {
+        "DEEP_SEEK_TUI": {}
+      }
     }
   }
 }

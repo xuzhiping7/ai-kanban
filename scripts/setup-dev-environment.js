@@ -4,9 +4,53 @@ const fs = require("fs");
 const path = require("path");
 const net = require("net");
 
-const PORTS_FILE = path.join(__dirname, "..", ".dev-ports.json");
-const DEV_ASSETS_SEED = path.join(__dirname, "..", "dev_assets_seed");
-const DEV_ASSETS = path.join(__dirname, "..", "dev_assets");
+const PROJECT_ROOT = path.join(__dirname, "..");
+const PORTS_FILE = path.join(PROJECT_ROOT, ".dev-ports.json");
+const DEV_ASSETS_SEED = path.join(PROJECT_ROOT, "dev_assets_seed");
+const DEV_ASSETS = path.join(PROJECT_ROOT, "dev_assets");
+const ENV_FILE = path.join(PROJECT_ROOT, ".env");
+const ENV_EXAMPLE_FILE = path.join(PROJECT_ROOT, ".env.example");
+
+/**
+ * Parse a single env file for a key, return the value or null.
+ */
+function readEnvFromFile(filePath, key) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const lines = fs.readFileSync(filePath, "utf8").split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      const k = trimmed.slice(0, eqIdx).trim();
+      if (k === key) return trimmed.slice(eqIdx + 1).replace(/^["']|["']$/g, "");
+    }
+  } catch (_) { /* ignore */ }
+  return null;
+}
+
+/**
+ * Read a port value: process.env → .env → .env.example → fallback.
+ */
+function envInt(key, fallback) {
+  // 1. Already set in environment (e.g. via CLI)
+  if (process.env[key]) return parseInt(process.env[key], 10);
+
+  // 2. User's personal .env (not committed)
+  const envVal = readEnvFromFile(ENV_FILE, key);
+  if (envVal) return parseInt(envVal, 10);
+
+  // 3. Project template .env.example (committed)
+  const exampleVal = readEnvFromFile(ENV_EXAMPLE_FILE, key);
+  if (exampleVal) return parseInt(exampleVal, 10);
+
+  return fallback;
+}
+
+// Port defaults — edit .env to customize, NOT this file.
+const DEFAULT_FRONTEND = envInt("FRONTEND_PORT", 3001);
+const DEFAULT_BACKEND = envInt("BACKEND_PORT", 3002);
+const DEFAULT_PREVIEW_PROXY = envInt("PREVIEW_PROXY_PORT", 3003);
 
 /**
  * Check if a port is available
@@ -23,15 +67,13 @@ function isPortAvailable(port) {
 }
 
 /**
- * Find a free port starting from a given port
+ * Ensure a port is available, throw if not.
  */
-async function findFreePort(startPort = 3000) {
-  let port = startPort;
-  while (!(await isPortAvailable(port))) {
-    port++;
-    if (port > 65535) {
-      throw new Error("No available ports found");
-    }
+async function requirePort(port, label) {
+  if (!(await isPortAvailable(port))) {
+    const msg = `Port ${port} (${label}) is already in use. Stop the conflicting process and try again.`;
+    console.error(msg);
+    throw new Error(msg);
   }
   return port;
 }
@@ -64,31 +106,18 @@ function savePorts(ports) {
 }
 
 /**
- * Verify that saved ports are still available
- */
-async function verifyPorts(ports) {
-  const frontendAvailable = await isPortAvailable(ports.frontend);
-  const backendAvailable = await isPortAvailable(ports.backend);
-  const previewProxyAvailable = await isPortAvailable(ports.preview_proxy);
-
-  if (process.argv[2] === "get" && (!frontendAvailable || !backendAvailable || !previewProxyAvailable)) {
-    console.log(
-      `Port availability check failed: frontend:${ports.frontend}=${frontendAvailable}, backend:${ports.backend}=${backendAvailable}, preview_proxy:${ports.preview_proxy}=${previewProxyAvailable}`
-    );
-  }
-
-  return frontendAvailable && backendAvailable && previewProxyAvailable;
-}
-
-/**
- * Allocate ports for development
+ * Allocate ports for development (fixed defaults, fail on conflict).
  */
 async function allocatePorts() {
-  // If PORT env is set, use it for frontend and PORT+1 for backend
+  // PORT env override: PORT for frontend, +1 for backend, +2 for preview
   if (process.env.PORT) {
     const frontendPort = parseInt(process.env.PORT, 10);
     const backendPort = frontendPort + 1;
     const previewProxyPort = backendPort + 1;
+
+    await requirePort(frontendPort, "frontend");
+    await requirePort(backendPort, "backend");
+    await requirePort(previewProxyPort, "preview proxy");
 
     const ports = {
       frontend: frontendPort,
@@ -97,58 +126,45 @@ async function allocatePorts() {
       timestamp: new Date().toISOString(),
     };
 
-    if (process.argv[2] === "get") {
-      console.log("Using PORT environment variable:");
-      console.log(`Frontend: ${ports.frontend}`);
-      console.log(`Backend: ${ports.backend}`);
-      console.log(`Preview Proxy: ${ports.preview_proxy}`);
-    }
-
+    savePorts(ports);
     return ports;
   }
 
-  // Try to load existing ports first
+  // Reuse saved ports if still available
   const existingPorts = loadPorts();
-
   if (existingPorts) {
-    // Verify existing ports are still available
-    if (await verifyPorts(existingPorts)) {
-      if (process.argv[2] === "get") {
-        console.log("Reusing existing dev ports:");
-        console.log(`Frontend: ${existingPorts.frontend}`);
-        console.log(`Backend: ${existingPorts.backend}`);
-        console.log(`Preview Proxy: ${existingPorts.preview_proxy}`);
-      }
+    const frontOk = await isPortAvailable(existingPorts.frontend);
+    const backOk = await isPortAvailable(existingPorts.backend);
+    const proxyOk = await isPortAvailable(existingPorts.preview_proxy);
+
+    if (frontOk && backOk && proxyOk) {
       return existingPorts;
-    } else {
-      if (process.argv[2] === "get") {
-        console.log(
-          "Existing ports are no longer available, finding new ones..."
-        );
-      }
     }
+
+    const taken = [];
+    if (!frontOk) taken.push(`frontend:${existingPorts.frontend}`);
+    if (!backOk) taken.push(`backend:${existingPorts.backend}`);
+    if (!proxyOk) taken.push(`preview_proxy:${existingPorts.preview_proxy}`);
+    console.error(
+      `Saved ports are no longer available: ${taken.join(", ")}. ` +
+      `Stop the conflicting process(es) or run "node scripts/setup-dev-environment.js clear" to reset.`
+    );
+    throw new Error("Port conflict");
   }
 
-  // Find new free ports
-  const frontendPort = await findFreePort(3000);
-  const backendPort = await findFreePort(frontendPort + 1);
-  const previewProxyPort = await findFreePort(backendPort + 1);
+  // First run: use fixed defaults
+  await requirePort(DEFAULT_FRONTEND, "frontend");
+  await requirePort(DEFAULT_BACKEND, "backend");
+  await requirePort(DEFAULT_PREVIEW_PROXY, "preview proxy");
 
   const ports = {
-    frontend: frontendPort,
-    backend: backendPort,
-    preview_proxy: previewProxyPort,
+    frontend: DEFAULT_FRONTEND,
+    backend: DEFAULT_BACKEND,
+    preview_proxy: DEFAULT_PREVIEW_PROXY,
     timestamp: new Date().toISOString(),
   };
 
   savePorts(ports);
-
-  if (process.argv[2] === "get") {
-    console.log("Allocated new dev ports:");
-    console.log(`Frontend: ${ports.frontend}`);
-    console.log(`Backend: ${ports.backend}`);
-    console.log(`Preview Proxy: ${ports.preview_proxy}`);
-  }
 
   return ports;
 }
@@ -258,4 +274,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { getPorts, clearPorts, findFreePort };
+module.exports = { getPorts, clearPorts };

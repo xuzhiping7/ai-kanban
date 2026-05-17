@@ -360,8 +360,8 @@ export function NavbarContainer({
               className="h-2.5 w-2.5 rounded-full shrink-0"
               style={{
                 backgroundColor: activeProjectId
-                  ? `hsl(${projects.find((p) => p.id === activeProjectId)?.color ?? 'var(--color-brand)'})`
-                  : 'var(--color-muted)',
+                  ? `hsl(${projects.find((p) => p.id === activeProjectId)?.color ?? 'var(--brand)'})`
+                  : 'var(--muted)',
               }}
             />
             <span className="truncate">
